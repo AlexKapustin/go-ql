@@ -5,57 +5,72 @@ import (
 	"strings"
 )
 
-// Postgres is a Dialect implementation targeting PostgreSQL / JSONB.
-type Postgres struct{}
+// MySQL is a Dialect implementation targeting MySQL 8.0 and above. It uses
+// backtick-quoted identifiers, the `->>` JSON path operator (available
+// since MySQL 5.7.13, unaffected by the 8.0 floor here), native
+// DATE_ADD/DATE_SUB/DATEDIFF, and ANSI TRIM syntax.
+//
+// The MySQL 8.0-and-above floor doesn't currently change any rendering
+// choice below — everything used here has been present since 5.7 — but is
+// documented as the supported floor for clarity, and to leave room for a
+// version-gated feature (e.g. a construct only valid from 8.0) to be added
+// without a breaking API change.
+type MySQL struct{}
 
-// NewPostgres returns a ready-to-use Postgres dialect.
-func NewPostgres() *Postgres {
-	return &Postgres{}
+// NewMySQL returns a ready-to-use MySQL dialect.
+func NewMySQL() *MySQL {
+	return &MySQL{}
 }
 
-func (Postgres) QuoteIdent(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+func (MySQL) QuoteIdent(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 
-func (p Postgres) QuoteQualified(parts ...string) string {
+func (m MySQL) QuoteQualified(parts ...string) string {
 	quoted := make([]string, len(parts))
 	for i, part := range parts {
-		quoted[i] = p.QuoteIdent(part)
+		quoted[i] = m.QuoteIdent(part)
 	}
 	return strings.Join(quoted, ".")
 }
 
-// JSONExtract renders `column #>> '{seg1,seg2}'`, PostgreSQL's operator for
-// extracting a nested JSONB value as text in one step regardless of depth.
-func (Postgres) JSONExtract(column string, path []string) (string, error) {
+// JSONExtract renders `column->>'$."seg1"."seg2"'`, MySQL's operator for
+// extracting a nested JSON value as unquoted text in one step. Each path
+// segment is double-quoted within the JSON path expression so a segment
+// containing characters that would otherwise be path syntax (e.g. a literal
+// ".") is still addressed as a single key, matching the reference PHP
+// implementation this library ports.
+func (MySQL) JSONExtract(column string, path []string) (string, error) {
 	if len(path) == 0 {
 		return "", fmt.Errorf("ql/dialect: JSONExtract requires a non-empty path")
 	}
-	for _, seg := range path {
-		if strings.ContainsAny(seg, `{}",\`) {
+	quoted := make([]string, len(path))
+	for i, seg := range path {
+		if strings.ContainsAny(seg, `$."'\`) {
 			return "", fmt.Errorf("ql/dialect: unsupported character in JSON path segment %q", seg)
 		}
+		quoted[i] = `"` + seg + `"`
 	}
-	return fmt.Sprintf("%s #>> '{%s}'", column, strings.Join(path, ",")), nil
+	return fmt.Sprintf(`%s->>'$.%s'`, column, strings.Join(quoted, ".")), nil
 }
 
-func (p Postgres) DateAdd(expr, n, unit string) (string, error) {
+func (MySQL) DateAdd(expr, n, unit string) (string, error) {
 	if !ValidDateUnits[strings.ToLower(unit)] {
 		return "", ErrInvalidDateUnit("DATE_ADD", unit)
 	}
-	return fmt.Sprintf("(%s + (%s || ' %s')::interval)", expr, n, strings.ToUpper(unit)), nil
+	return fmt.Sprintf("DATE_ADD(%s, INTERVAL %s %s)", expr, n, strings.ToUpper(unit)), nil
 }
 
-func (p Postgres) DateSub(expr, n, unit string) (string, error) {
+func (MySQL) DateSub(expr, n, unit string) (string, error) {
 	if !ValidDateUnits[strings.ToLower(unit)] {
 		return "", ErrInvalidDateUnit("DATE_SUB", unit)
 	}
-	return fmt.Sprintf("(%s - (%s || ' %s')::interval)", expr, n, strings.ToUpper(unit)), nil
+	return fmt.Sprintf("DATE_SUB(%s, INTERVAL %s %s)", expr, n, strings.ToUpper(unit)), nil
 }
 
 // Trim renders the ANSI-standard TRIM([LEADING|TRAILING|BOTH] [char] FROM
-// target) form, which PostgreSQL supports natively.
-func (Postgres) Trim(mode, char, target string) (string, error) {
+// target) form, which MySQL supports natively.
+func (MySQL) Trim(mode, char, target string) (string, error) {
 	switch {
 	case mode != "" && char != "":
 		return fmt.Sprintf("TRIM(%s %s FROM %s)", mode, char, target), nil
@@ -68,14 +83,7 @@ func (Postgres) Trim(mode, char, target string) (string, error) {
 	}
 }
 
-func exactly(n int, name string, args []string) error {
-	if len(args) != n {
-		return fmt.Errorf("ql/dialect: %s() expects %d argument(s), got %d", name, n, len(args))
-	}
-	return nil
-}
-
-func (p Postgres) Functions() map[string]FuncRenderer {
+func (m MySQL) Functions() map[string]FuncRenderer {
 	return map[string]FuncRenderer{
 		"concat": func(args []string) (string, error) {
 			if len(args) < 2 {
@@ -108,23 +116,14 @@ func (p Postgres) Functions() map[string]FuncRenderer {
 			return "LENGTH(" + args[0] + ")", nil
 		},
 		"locate": func(args []string) (string, error) {
-			// ZQL: locate(needle, haystack [, startPos]). PostgreSQL has no
-			// LOCATE builtin; STRPOS(haystack, needle) is the equivalent
-			// without a start-position argument. When a start position is
-			// given, search the substring of haystack from that position
-			// and add the offset back in.
+			// ZQL: locate(needle, haystack [, startPos]). MySQL's native
+			// LOCATE(substr, str[, pos]) takes its arguments in this exact
+			// order, so no rewriting is needed here (unlike the Postgres
+			// and SQLite dialects, which have no 3-argument equivalent).
 			if len(args) < 2 || len(args) > 3 {
 				return "", fmt.Errorf("ql/dialect: locate() expects 2 or 3 arguments, got %d", len(args))
 			}
-			needle, haystack := args[0], args[1]
-			if len(args) == 2 {
-				return fmt.Sprintf("STRPOS(%s, %s)", haystack, needle), nil
-			}
-			pos := args[2]
-			return fmt.Sprintf(
-				"(CASE WHEN STRPOS(SUBSTRING(%s FROM (%s)+1), %s) = 0 THEN 0 ELSE STRPOS(SUBSTRING(%s FROM (%s)+1), %s) + (%s) END)",
-				haystack, pos, needle, haystack, pos, needle, pos,
-			), nil
+			return "LOCATE(" + strings.Join(args, ", ") + ")", nil
 		},
 		"abs": func(args []string) (string, error) {
 			if err := exactly(1, "abs", args); err != nil {
@@ -145,13 +144,12 @@ func (p Postgres) Functions() map[string]FuncRenderer {
 			return fmt.Sprintf("MOD(%s, %s)", args[0], args[1]), nil
 		},
 		"date_diff": func(args []string) (string, error) {
-			// ZQL: date_diff(date1, date2). PostgreSQL has no DATEDIFF
-			// builtin; date subtraction on two date-castable expressions
-			// yields the difference in days.
+			// ZQL: date_diff(date1, date2). MySQL's native DATEDIFF(a, b)
+			// returns a - b in whole days.
 			if err := exactly(2, "date_diff", args); err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("(%s::date - %s::date)", args[0], args[1]), nil
+			return fmt.Sprintf("DATEDIFF(%s, %s)", args[0], args[1]), nil
 		},
 		"bit_and": func(args []string) (string, error) {
 			if err := exactly(2, "bit_and", args); err != nil {
@@ -169,19 +167,19 @@ func (p Postgres) Functions() map[string]FuncRenderer {
 			if err := exactly(0, "current_date", args); err != nil {
 				return "", err
 			}
-			return "CURRENT_DATE", nil
+			return "CURRENT_DATE()", nil
 		},
 		"current_time": func(args []string) (string, error) {
 			if err := exactly(0, "current_time", args); err != nil {
 				return "", err
 			}
-			return "CURRENT_TIME", nil
+			return "CURRENT_TIME()", nil
 		},
 		"current_timestamp": func(args []string) (string, error) {
 			if err := exactly(0, "current_timestamp", args); err != nil {
 				return "", err
 			}
-			return "CURRENT_TIMESTAMP", nil
+			return "CURRENT_TIMESTAMP()", nil
 		},
 	}
 }

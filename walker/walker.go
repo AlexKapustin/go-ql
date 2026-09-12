@@ -400,14 +400,7 @@ func (w *Walker) renderTrim(t *ast.TrimExpression) (string, error) {
 		}
 	}
 
-	switch {
-	case t.Mode != "":
-		return fmt.Sprintf("TRIM(%s %s FROM %s)", t.Mode, charSQL, target), nil
-	case t.Char != nil:
-		return fmt.Sprintf("TRIM(%s FROM %s)", charSQL, target), nil
-	default:
-		return "TRIM(" + target + ")", nil
-	}
+	return w.dialect.Trim(t.Mode, charSQL, target)
 }
 
 func (w *Walker) renderDateAdd(d *ast.DateAddExpression) (string, error) {

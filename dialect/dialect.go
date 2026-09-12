@@ -34,6 +34,14 @@ type Dialect interface {
 	// DateSub renders `expr - n unit` as a date/timestamp subtraction.
 	DateSub(expr, n, unit string) (string, error)
 
+	// Trim renders a TRIM([LEADING|TRAILING|BOTH] [char] FROM target)
+	// expression. mode is one of "", "LEADING", "TRAILING", "BOTH"; char is
+	// "" when the query gave no trim-character expression (trim whitespace).
+	// This is part of Dialect, not rendered generically by the walker,
+	// because engines disagree on TRIM's syntax — e.g. SQLite has no
+	// FROM-clause form and instead uses TRIM/LTRIM/RTRIM(target[, chars]).
+	Trim(mode, char, target string) (string, error)
+
 	// Functions returns the table of built-in function renderers, keyed by
 	// lower-cased function name.
 	Functions() map[string]FuncRenderer

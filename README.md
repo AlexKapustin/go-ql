@@ -110,6 +110,9 @@ with the rest of GORM's chainable API and with your own scopes. A compile
 error (bad syntax, an unwhitelisted field, a missing parameter, ...) is
 recorded via `db.AddError` rather than panicking, so it surfaces through the
 normal `.Error` check at the end of the chain like any other GORM error.
+`ql.Compile`/`ql.Where` default to the Postgres dialect — pass
+`ql.WithDialect(dialect.NewSQLite())` (see [Dialects](#dialects)) if your
+`*gorm.DB` is actually a SQLite connection.
 
 ### Filtering a list endpoint
 
@@ -301,14 +304,42 @@ grammatically valid one that isn't allowed — an unknown alias, a field not
 in that table's whitelist, an undeclared parameter, or an invalid function
 argument (e.g. a bad `date_add` unit).
 
-## Extending to another database
+## Dialects
 
 SQL generation lives entirely behind the `dialect.Dialect` interface
-(identifier quoting, JSON path extraction, date arithmetic, and the
-built-in function table) — `dialect.NewPostgres()` is the only
-implementation today, but a MySQL or SQLite dialect can be added without
-touching the lexer, parser, or walker. Pass a custom one with
-`ql.WithDialect(...)`.
+(identifier quoting, JSON path extraction, date arithmetic, `TRIM` syntax,
+and the built-in function table) — the lexer, parser, and walker know
+nothing dialect-specific. Three implementations ship today:
+
+- `dialect.NewPostgres()` — the default. JSONB `#>>` path extraction, ANSI
+  `TRIM(... FROM ...)`, `+/- INTERVAL` date arithmetic.
+- `dialect.NewMySQL()` — pass via `ql.WithDialect(dialect.NewMySQL())`.
+  Targets **MySQL 8.0 and above**. Backtick identifiers, `->>'$."path"'`
+  JSON path extraction, native `DATE_ADD`/`DATE_SUB(expr, INTERVAL n UNIT)`,
+  `DATEDIFF`, and `LOCATE(needle, haystack[, pos])` (MySQL's native 3-argument
+  form takes arguments in exactly the order this library's `locate()` uses,
+  so no rewriting is needed, unlike the other two dialects).
+- `dialect.NewSQLite()` — pass via `ql.WithDialect(dialect.NewSQLite())`.
+  Uses `json_extract(col, '$.path')` for JSON columns, `TRIM`/`LTRIM`/`RTRIM`
+  (SQLite has no `FROM`-clause `TRIM` form), and `datetime(expr, printf(...))`
+  modifiers for date arithmetic (SQLite has no `DATE_ADD`/`DATEDIFF`
+  builtins — `date_diff` uses `julianday()` subtraction instead). `sqrt()`
+  and `mod()` render to `SQRT()`/`%`; `SQRT()` needs SQLite built with
+  `SQLITE_ENABLE_MATH_FUNCTIONS`, the default in most modern builds and Go
+  drivers (`modernc.org/sqlite`, `mattn/go-sqlite3`'s default tags) — if
+  yours lacks it, override with `ql.WithCustomFunc("sqrt", ...)`.
+
+```go
+res, err := ql.Compile(
+	`product.brand = :brand and product.price < 100`,
+	components,
+	ql.WithParams(map[string]any{"brand": "Samsung"}),
+	ql.WithDialect(dialect.NewMySQL()),
+)
+```
+
+Another engine can be added the same way, without touching the lexer,
+parser, or walker.
 
 ## Package layout
 
@@ -326,7 +357,15 @@ gorm.go   GORM Where(...) scope adapter
 
 ## Testing
 
-`go test ./...` runs the full unit and fixture-ported test suite. A
-live-database integration test also exists (`integration_test.go`); it's
-skipped unless `QL_TEST_POSTGRES_DSN` is set to a Postgres connection
-string.
+`go test ./...` runs the full unit and fixture-ported test suite for all
+three dialects. Two of the three also have a live-database integration
+test:
+
+- `integration_test.go` (Postgres) — skipped unless `QL_TEST_POSTGRES_DSN`
+  is set to a Postgres connection string.
+- `integration_mysql_test.go` (MySQL) — skipped unless `QL_TEST_MYSQL_DSN`
+  is set to a `go-sql-driver/mysql` DSN, e.g.
+  `user:pass@tcp(127.0.0.1:3306)/dbname?parseTime=true`.
+- `integration_sqlite_test.go` (SQLite) — always runs; SQLite needs no
+  external service, so this one executes against a real in-memory database
+  every time.
