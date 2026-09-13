@@ -69,7 +69,7 @@ if err != nil {
 }
 
 var products []Product
-err = db.Where(res.SQL, res.Args).Find(&products).Error
+err = db.Where(res.SQL, res.GormArgs()...).Find(&products).Error
 ```
 
 Or use the GORM scope adapter, which folds compile errors into
@@ -91,6 +91,13 @@ need to think about placeholder numbering or ordering. Numeric and boolean
 literals are inlined directly (they can't carry a SQL-injection risk once
 the parser has validated them as a number/bool token); string and date
 literals are always placeholder-bound.
+
+Always call `db.Where(res.SQL, res.GormArgs()...)` rather than
+`db.Where(res.SQL, res.Args)` directly — `GormArgs()` omits the argument
+entirely when `res.Args` is empty (a query with no literals or params at
+all, e.g. `product.sku is not null`), which plain `res.Args` doesn't: GORM
+mishandles being passed a `map[string]any` it has nothing in the SQL to
+resolve it against.
 
 ### Using it outside GORM
 
@@ -207,7 +214,7 @@ func FindProducts(db *gorm.DB, filter string, params map[string]any) ([]Product,
 		return nil, err
 	}
 	var products []Product
-	err = db.Where(res.SQL, res.Args).Find(&products).Error
+	err = db.Where(res.SQL, res.GormArgs()...).Find(&products).Error
 	return products, err
 }
 ```
@@ -356,6 +363,22 @@ against a JSON field on every supported dialect. This is transparent — you
 never need to write your query differently for a JSON field vs. a plain
 column — but if you inspect the generated SQL, expect to see e.g.
 `metadata->>'$."flag"' = 'true'` rather than `= TRUE`.
+
+### `IS NULL` against a JSON field: missing key vs. explicit JSON `null`
+
+`product.brand is null` matches a row whether the JSON document is missing
+the `brand` key entirely or has it explicitly set to JSON `null` — on every
+supported dialect. This needs no special handling on your part, but MySQL
+specifically requires it under the hood: MySQL's `->>`/`JSON_EXTRACT` return
+SQL `NULL` for a genuinely missing key, but the *text* `"null"` (not SQL
+`NULL`) for a key explicitly set to JSON `null` — so a plain
+`extracted IS NULL` check would silently miss the second case. `ql`'s MySQL
+dialect renders `IS [NOT] NULL` against a JSON field as a
+`JSON_CONTAINS_PATH(...)`-based check instead, to treat "missing" and
+"explicitly null" identically, matching PostgreSQL's and SQLite's native
+behavior. This is covered by a live-database integration test on all three
+dialects (`integration_test.go`, `integration_mysql_test.go`,
+`integration_sqlite_test.go`), not just a fixture-text assertion.
 
 ## Package layout
 

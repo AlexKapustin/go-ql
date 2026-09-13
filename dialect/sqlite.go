@@ -94,6 +94,21 @@ func (SQLite) JSONComparableNumber(n string) string {
 	return n
 }
 
+// JSONIsNull extracts and appends IS [NOT] NULL as normal: json_extract
+// already returns SQL NULL for both a missing key and a key explicitly set
+// to JSON null, so no special-casing is needed here (contrast
+// dialect/mysql.go).
+func (s SQLite) JSONIsNull(column string, path []string, not bool) (string, error) {
+	extracted, err := s.JSONExtract(column, path)
+	if err != nil {
+		return "", err
+	}
+	if not {
+		return extracted + " IS NOT NULL", nil
+	}
+	return extracted + " IS NULL", nil
+}
+
 func (s SQLite) DateAdd(expr, n, unit string) (string, error) {
 	if !ValidDateUnits[strings.ToLower(unit)] {
 		return "", ErrInvalidDateUnit("DATE_ADD", unit)

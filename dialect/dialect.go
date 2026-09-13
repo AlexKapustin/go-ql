@@ -47,6 +47,19 @@ type Dialect interface {
 	// needs the number quoted as text instead.
 	JSONComparableNumber(n string) string
 
+	// JSONIsNull renders `<field> IS [NOT] NULL` for a JSON-mapped field,
+	// given the same (column, path) inputs as JSONExtract rather than an
+	// already-extracted expression. This exists because some engines'
+	// extraction can't tell an explicit JSON null value apart from a
+	// missing key using a plain "extracted IS NULL" check — e.g. MySQL's
+	// ->>/JSON_EXTRACT return SQL NULL for a missing key, but the text
+	// "null" (not SQL NULL) for a key explicitly set to JSON null — so
+	// that dialect must render a different expression than the extraction
+	// used everywhere else. A dialect whose extraction already unifies
+	// both cases as SQL NULL (PostgreSQL, SQLite) can just extract and
+	// append IS [NOT] NULL as normal.
+	JSONIsNull(column string, path []string, not bool) (string, error)
+
 	// DateAdd renders `expr + n unit` as a date/timestamp addition.
 	// unit has already been validated against the fixed whitelist
 	// (second, minute, hour, day, week, month, year).

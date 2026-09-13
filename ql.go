@@ -10,7 +10,7 @@
 //	}
 //	res, err := ql.Compile(`product.sku = :sku and product.price > 100`, components,
 //		ql.WithParams(map[string]any{"sku": "abc-123"}))
-//	db.Where(res.SQL, res.Args).Find(&products)
+//	db.Where(res.SQL, res.GormArgs()...).Find(&products)
 package ql
 
 import (
@@ -40,6 +40,19 @@ type Result struct {
 // GORM's named-argument syntax directly.
 func (r *Result) Positional() (sql string, args []any) {
 	return rewriteToPositional(r.SQL, r.Args)
+}
+
+// GormArgs returns the variadic argument(s) to pass to gorm.DB.Where (or
+// Model, Or, ...) alongside SQL: db.Where(res.SQL, res.GormArgs()...). Use
+// this instead of passing res.Args directly — when SQL has no @name
+// placeholders at all (e.g. a bare "col IS NULL" with no literals or
+// params), GORM mishandles a lone map[string]any argument it has nothing
+// to resolve against, so GormArgs omits it entirely in that case.
+func (r *Result) GormArgs() []any {
+	if len(r.Args) == 0 {
+		return nil
+	}
+	return []any{r.Args}
 }
 
 type options struct {

@@ -55,6 +55,20 @@ func (Postgres) JSONComparableNumber(n string) string {
 	return "'" + n + "'"
 }
 
+// JSONIsNull extracts and appends IS [NOT] NULL as normal: #>> already
+// returns SQL NULL for both a missing key and a key explicitly set to JSON
+// null, so no special-casing is needed here (contrast dialect/mysql.go).
+func (p Postgres) JSONIsNull(column string, path []string, not bool) (string, error) {
+	extracted, err := p.JSONExtract(column, path)
+	if err != nil {
+		return "", err
+	}
+	if not {
+		return extracted + " IS NOT NULL", nil
+	}
+	return extracted + " IS NULL", nil
+}
+
 func (p Postgres) DateAdd(expr, n, unit string) (string, error) {
 	if !ValidDateUnits[strings.ToLower(unit)] {
 		return "", ErrInvalidDateUnit("DATE_ADD", unit)

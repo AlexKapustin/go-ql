@@ -178,6 +178,20 @@ func (w *Walker) render(n ast.Node) (string, error) {
 		return s, nil
 
 	case *ast.NullComparisonExpression:
+		if pe, ok := v.Expr.(*ast.PathExpression); ok {
+			column, jsonPath, isJSON, err := w.resolvePath(pe)
+			if err != nil {
+				return "", err
+			}
+			if isJSON {
+				return w.dialect.JSONIsNull(column, jsonPath, v.Not)
+			}
+			s := column + " IS"
+			if v.Not {
+				s += " NOT"
+			}
+			return s + " NULL", nil
+		}
 		e, err := w.render(v.Expr)
 		if err != nil {
 			return "", err
@@ -358,33 +372,46 @@ func (w *Walker) isJSONPath(n ast.Node) bool {
 }
 
 func (w *Walker) renderPathExpression(pe *ast.PathExpression) (string, error) {
+	column, jsonPath, isJSON, err := w.resolvePath(pe)
+	if err != nil {
+		return "", err
+	}
+	if !isJSON {
+		return column, nil
+	}
+	return w.dialect.JSONExtract(column, jsonPath)
+}
+
+// resolvePath resolves pe to its quoted column expression and, if it maps
+// to a JSON-backed field, the JSON path segments within that column
+// (isJSON reports which). It also tallies field usage as a side effect, so
+// every caller that resolves a PathExpression — whether via
+// renderPathExpression or a dialect-specific case that needs the raw
+// column/path instead of an already-extracted expression, such as
+// NullComparisonExpression's JSON handling below — must call this exactly
+// once per occurrence rather than resolving the field itself.
+func (w *Walker) resolvePath(pe *ast.PathExpression) (column string, jsonPath []string, isJSON bool, err error) {
 	meta, ok := w.components[pe.Alias]
 	if !ok {
-		return "", fmt.Errorf("ql: alias %q is not defined", pe.Alias)
+		return "", nil, false, fmt.Errorf("ql: alias %q is not defined", pe.Alias)
 	}
 	fm, ok := meta.Fields()[pe.Field]
 	if !ok {
-		return "", fmt.Errorf("ql: field %q is not defined on %q", pe.Field, pe.Alias)
+		return "", nil, false, fmt.Errorf("ql: field %q is not defined on %q", pe.Field, pe.Alias)
 	}
 
 	table := meta.TableName()
-	column := w.dialect.QuoteQualified(table, fm.Column)
-
-	sql := column
-	if fm.JSONPath != "" {
-		extracted, err := w.dialect.JSONExtract(column, strings.Split(fm.JSONPath, "."))
-		if err != nil {
-			return "", err
-		}
-		sql = extracted
-	}
-
 	// Usage is tallied by the resolved database column (fm.Column), not the
-	// logical field name  — two logical fields backed by the same JSON column
+	// logical field name — two logical fields backed by the same JSON column
 	// (e.g. two different json_path fields both stored in a "metadata" column) count
 	// against that one column.
 	w.trackUsage(table, meta, fm.Column)
-	return sql, nil
+
+	column = w.dialect.QuoteQualified(table, fm.Column)
+	if fm.JSONPath == "" {
+		return column, nil, false, nil
+	}
+	return column, strings.Split(fm.JSONPath, "."), true, nil
 }
 
 func (w *Walker) trackUsage(table string, meta schema.TableMetadata, column string) {

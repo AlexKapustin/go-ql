@@ -21,6 +21,6 @@ func Where(src string, components schema.Components, opts ...Option) func(*gorm.
 			db.AddError(err)
 			return db
 		}
-		return db.Where(res.SQL, res.Args)
+		return db.Where(res.SQL, res.GormArgs()...)
 	}
 }

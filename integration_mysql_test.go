@@ -2,6 +2,7 @@ package ql
 
 import (
 	"os"
+	"slices"
 	"testing"
 
 	"gorm.io/driver/mysql"
@@ -71,5 +72,58 @@ func TestMySQLIntegration(t *testing.T) {
 
 	if len(rows) != 1 || rows[0].Sku != "sku-1" {
 		t.Fatalf("rows = %+v, want exactly sku-1", rows)
+	}
+}
+
+// TestMySQLJSONNullIntegration confirms that "product.brand is null"
+// matches both a JSON key explicitly set to null and a row where the key is
+// missing from the JSON document entirely — MySQL's ->> returns SQL NULL
+// for both cases, but that's worth locking in against a real database
+// rather than trusting reasoning about the operator's documented behavior.
+func TestMySQLJSONNullIntegration(t *testing.T) {
+	dsn := os.Getenv("QL_TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("QL_TEST_MYSQL_DSN not set; skipping live MySQL integration test")
+	}
+
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("connecting to mysql: %v", err)
+	}
+
+	if err := db.Exec(`DROP TABLE IF EXISTS products`).Error; err != nil {
+		t.Fatalf("dropping table: %v", err)
+	}
+	if err := db.Exec(`
+		CREATE TABLE products (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			sku VARCHAR(255) NOT NULL,
+			price DECIMAL(10,2) NOT NULL,
+			metadata JSON
+		)
+	`).Error; err != nil {
+		t.Fatalf("creating table: %v", err)
+	}
+	if err := db.Exec(`
+		INSERT INTO products (sku, price, metadata) VALUES
+			('sku-null-brand', 10, '{"brand": null}'),
+			('sku-missing-brand', 10, '{"other": "x"}'),
+			('sku-has-brand', 10, '{"brand": "Samsung"}')
+	`).Error; err != nil {
+		t.Fatalf("seeding rows: %v", err)
+	}
+
+	components := schema.Components{"product": productEntity{}}
+
+	var skus []string
+	err = db.Table("products").Scopes(Where(`product.brand is null`, components, WithDialect(dialect.NewMySQL()))).
+		Order("sku").Pluck("sku", &skus).Error
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+
+	want := []string{"sku-missing-brand", "sku-null-brand"}
+	if !slices.Equal(skus, want) {
+		t.Fatalf("skus = %v, want %v", skus, want)
 	}
 }

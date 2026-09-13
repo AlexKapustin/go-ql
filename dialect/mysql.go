@@ -41,8 +41,19 @@ func (m MySQL) QuoteQualified(parts ...string) string {
 // ".") is still addressed as a single key, matching the reference PHP
 // implementation this library ports.
 func (MySQL) JSONExtract(column string, path []string) (string, error) {
+	jsonPath, err := mysqlJSONPathLiteral(path)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`%s->>%s`, column, jsonPath), nil
+}
+
+// mysqlJSONPathLiteral renders path as a quoted MySQL JSON path literal,
+// e.g. ["custom","hfss"] -> `'$."custom"."hfss"'`, shared by JSONExtract
+// and JSONIsNull.
+func mysqlJSONPathLiteral(path []string) (string, error) {
 	if len(path) == 0 {
-		return "", fmt.Errorf("ql/dialect: JSONExtract requires a non-empty path")
+		return "", fmt.Errorf("ql/dialect: JSON path must be non-empty")
 	}
 	quoted := make([]string, len(path))
 	for i, seg := range path {
@@ -51,7 +62,27 @@ func (MySQL) JSONExtract(column string, path []string) (string, error) {
 		}
 		quoted[i] = `"` + seg + `"`
 	}
-	return fmt.Sprintf(`%s->>'$.%s'`, column, strings.Join(quoted, ".")), nil
+	return `'$.` + strings.Join(quoted, ".") + `'`, nil
+}
+
+// JSONIsNull can't just extract-and-append IS [NOT] NULL like the other
+// dialects: MySQL's ->>/JSON_EXTRACT return SQL NULL for a missing key, but
+// the text "null" (not SQL NULL) for a key explicitly set to JSON null.
+// Instead this checks path existence with JSON_CONTAINS_PATH and compares
+// the raw (non-unquoted) extraction against a JSON null literal, which
+// correctly distinguishes "missing" from "present but null" from "present
+// with a real value" — verified against a live MySQL 8.0 instance.
+func (MySQL) JSONIsNull(column string, path []string, not bool) (string, error) {
+	jsonPath, err := mysqlJSONPathLiteral(path)
+	if err != nil {
+		return "", err
+	}
+	pathExists := fmt.Sprintf("JSON_CONTAINS_PATH(%s, 'one', %s)", column, jsonPath)
+	rawExtract := fmt.Sprintf("JSON_EXTRACT(%s, %s)", column, jsonPath)
+	if not {
+		return fmt.Sprintf("(%s AND %s <> CAST('null' AS JSON))", pathExists, rawExtract), nil
+	}
+	return fmt.Sprintf("((NOT %s) OR %s = CAST('null' AS JSON))", pathExists, rawExtract), nil
 }
 
 // JSONComparableBool quotes the boolean as text: MySQL's ->> always returns
