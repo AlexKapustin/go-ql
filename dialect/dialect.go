@@ -26,6 +26,27 @@ type Dialect interface {
 	// at path within the JSON/JSONB column expression.
 	JSONExtract(column string, path []string) (string, error)
 
+	// JSONComparableBool renders a boolean value the way it must be written
+	// to compare correctly against a JSONExtract result holding a JSON
+	// boolean. Some engines' text-returning JSON extraction (e.g.
+	// PostgreSQL's #>>, MySQL's ->>) can't be compared against that
+	// engine's native boolean keyword — PostgreSQL rejects text = boolean
+	// outright, and MySQL's numeric string coercion maps both "true" and
+	// "false" to 0 — so those dialects render this as quoted text instead.
+	// A dialect whose JSON extraction already yields a typed value (e.g.
+	// SQLite's json_extract, which returns 0/1) returns its normal boolean
+	// rendering unchanged.
+	JSONComparableBool(v bool) string
+
+	// JSONComparableNumber renders n (already-validated, well-formed
+	// digit/./e/+/- text) the way it must be written to compare correctly
+	// against a JSONExtract result holding a JSON number, for the same
+	// reason as JSONComparableBool. Most engines coerce a numeric string
+	// back to a number for comparison and so need no change here — this
+	// exists for a dialect that, like JSONComparableBool's PostgreSQL case,
+	// needs the number quoted as text instead.
+	JSONComparableNumber(n string) string
+
 	// DateAdd renders `expr + n unit` as a date/timestamp addition.
 	// unit has already been validated against the fixed whitelist
 	// (second, minute, hour, day, week, month, year).

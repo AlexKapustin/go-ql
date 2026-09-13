@@ -141,7 +141,10 @@ func TestSimpleFixtures(t *testing.T) {
 			`concat(product.sku, "-", product.price) = "111"`,
 			`(CONCAT("products"."sku", '-', "products"."price") = '111')`,
 		},
-		{`product_custom.hfss = true`, `("products"."metadata" #>> '{custom,hfss}' = TRUE)`},
+		{`product_custom.hfss = true`, `("products"."metadata" #>> '{custom,hfss}' = 'true')`},
+		{`product_custom.test1 = 5`, `("products"."metadata" #>> '{custom,test1}' = '5')`},
+		{`product_custom.test1 between 1 and 10`, `("products"."metadata" #>> '{custom,test1}' BETWEEN '1' AND '10')`},
+		{`product_custom.test1 in (1, 2, 3)`, `("products"."metadata" #>> '{custom,test1}' IN ('1', '2', '3'))`},
 		{
 			`date_add(product.sale_price, 10, "year") > "2025-01-01"`,
 			`(("products"."sale_price" + (10 || ' YEAR')::interval) > '2025-01-01 00:00:00')`,

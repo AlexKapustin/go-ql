@@ -106,11 +106,11 @@ func (w *Walker) render(n ast.Node) (string, error) {
 		return "(" + s + ")", nil
 
 	case *ast.ComparisonExpression:
-		l, err := w.render(v.Left)
+		l, err := w.renderAgainst(v.Left, v.Right)
 		if err != nil {
 			return "", err
 		}
-		r, err := w.render(v.Right)
+		r, err := w.renderAgainst(v.Right, v.Left)
 		if err != nil {
 			return "", err
 		}
@@ -121,11 +121,11 @@ func (w *Walker) render(n ast.Node) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		l, err := w.render(v.Left)
+		l, err := w.renderAgainst(v.Left, v.Expr)
 		if err != nil {
 			return "", err
 		}
-		r, err := w.render(v.Right)
+		r, err := w.renderAgainst(v.Right, v.Expr)
 		if err != nil {
 			return "", err
 		}
@@ -140,9 +140,13 @@ func (w *Walker) render(n ast.Node) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		items, err := w.renderAll(v.Items)
-		if err != nil {
-			return "", err
+		items := make([]string, len(v.Items))
+		for i, item := range v.Items {
+			s, err := w.renderAgainst(item, v.Expr)
+			if err != nil {
+				return "", err
+			}
+			items[i] = s
 		}
 		s := e
 		if v.Not {
@@ -315,6 +319,42 @@ func (w *Walker) renderChain(items []ast.Node, ops []string) (string, error) {
 		sb.WriteString(" " + op + " " + parts[i+1])
 	}
 	return sb.String(), nil
+}
+
+// renderAgainst renders n, the way it should be written when compared
+// against other. If n is a boolean or numeric literal and other is a
+// path expression resolving to a JSON-mapped field, it is routed through
+// the dialect's JSON-comparable rendering instead of its normal literal
+// rendering — see Dialect.JSONComparableBool/JSONComparableNumber for why:
+// some engines' JSON-path extraction always returns text, and comparing
+// that text against the literal's native SQL form (a bare TRUE/FALSE
+// keyword, or an unquoted number) either errors outright or silently
+// compares wrong.
+func (w *Walker) renderAgainst(n, other ast.Node) (string, error) {
+	if lit, ok := n.(*ast.Literal); ok && w.isJSONPath(other) {
+		switch lit.Type {
+		case ast.LiteralBoolean:
+			return w.dialect.JSONComparableBool(lit.Value == "true"), nil
+		case ast.LiteralNumeric:
+			return w.dialect.JSONComparableNumber(lit.Value), nil
+		}
+	}
+	return w.render(n)
+}
+
+// isJSONPath reports whether n is a path expression resolving to a field
+// backed by a JSON path rather than a plain column.
+func (w *Walker) isJSONPath(n ast.Node) bool {
+	pe, ok := n.(*ast.PathExpression)
+	if !ok {
+		return false
+	}
+	meta, ok := w.components[pe.Alias]
+	if !ok {
+		return false
+	}
+	fm, ok := meta.Fields()[pe.Field]
+	return ok && fm.JSONPath != ""
 }
 
 func (w *Walker) renderPathExpression(pe *ast.PathExpression) (string, error) {

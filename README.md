@@ -341,6 +341,22 @@ res, err := ql.Compile(
 Another engine can be added the same way, without touching the lexer,
 parser, or walker.
 
+### Comparing JSON fields to a number or boolean
+
+PostgreSQL's `#>>` and MySQL's `->>` JSON-path operators always return
+`text`, even for a JSON number or boolean. Comparing that text against a
+number or boolean literal's normal SQL form doesn't reliably work: PostgreSQL
+rejects `text = boolean`/`text = numeric` outright, and MySQL's string→number
+coercion maps both `true` and `false` to `0`, silently breaking boolean
+equality. `ql` handles this automatically — a numeric or boolean literal
+compared against a JSON-mapped field (via `=`, `<`, `BETWEEN`, `IN`, etc.) is
+rendered as dialect-appropriate text instead of its native form, so
+`product.flag = true` and `product.score between 1 and 10` work correctly
+against a JSON field on every supported dialect. This is transparent — you
+never need to write your query differently for a JSON field vs. a plain
+column — but if you inspect the generated SQL, expect to see e.g.
+`metadata->>'$."flag"' = 'true'` rather than `= TRUE`.
+
 ## Package layout
 
 ```

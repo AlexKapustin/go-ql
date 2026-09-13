@@ -90,6 +90,9 @@ func TestSQLiteSimpleFixtures(t *testing.T) {
 			`(("products"."sku" || '-' || "products"."price") = '111')`,
 		},
 		{`product_custom.hfss = true`, `(json_extract("products"."metadata", '$.custom.hfss') = TRUE)`},
+		{`product_custom.test1 = 5`, `(json_extract("products"."metadata", '$.custom.test1') = 5)`},
+		{`product_custom.test1 between 1 and 10`, `(json_extract("products"."metadata", '$.custom.test1') BETWEEN 1 AND 10)`},
+		{`product_custom.test1 in (1, 2, 3)`, `(json_extract("products"."metadata", '$.custom.test1') IN (1, 2, 3))`},
 		{
 			`date_add(product.sale_price, 10, "year") > "2025-01-01"`,
 			`(datetime("products"."sale_price", printf('%+d years', 10)) > '2025-01-01 00:00:00')`,

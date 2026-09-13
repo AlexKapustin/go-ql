@@ -39,6 +39,22 @@ func (Postgres) JSONExtract(column string, path []string) (string, error) {
 	return fmt.Sprintf("%s #>> '{%s}'", column, strings.Join(path, ",")), nil
 }
 
+// JSONComparableBool quotes the boolean as text: PostgreSQL's #>> always
+// returns text, and there is no text = boolean operator.
+func (Postgres) JSONComparableBool(v bool) string {
+	if v {
+		return "'true'"
+	}
+	return "'false'"
+}
+
+// JSONComparableNumber quotes the number as text, for the same reason as
+// JSONComparableBool: #>> returns text, and there is no text = numeric
+// operator either.
+func (Postgres) JSONComparableNumber(n string) string {
+	return "'" + n + "'"
+}
+
 func (p Postgres) DateAdd(expr, n, unit string) (string, error) {
 	if !ValidDateUnits[strings.ToLower(unit)] {
 		return "", ErrInvalidDateUnit("DATE_ADD", unit)

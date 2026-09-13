@@ -76,6 +76,24 @@ func (SQLite) dateShift(expr, n, unit string, negate bool) (string, error) {
 	return fmt.Sprintf("datetime(%s, printf('%%+d %s', %s))", expr, word, amount), nil
 }
 
+// JSONComparableBool renders the boolean's normal keyword form unchanged:
+// SQLite's json_extract already returns a JSON boolean as the native
+// integer 0/1, which compares correctly against TRUE/FALSE (SQLite's own
+// aliases for 1/0) with no special handling needed.
+func (SQLite) JSONComparableBool(v bool) string {
+	if v {
+		return "TRUE"
+	}
+	return "FALSE"
+}
+
+// JSONComparableNumber renders n unchanged, for the same reason as
+// JSONComparableBool: json_extract already returns a JSON number as a
+// native, properly-typed SQLite value.
+func (SQLite) JSONComparableNumber(n string) string {
+	return n
+}
+
 func (s SQLite) DateAdd(expr, n, unit string) (string, error) {
 	if !ValidDateUnits[strings.ToLower(unit)] {
 		return "", ErrInvalidDateUnit("DATE_ADD", unit)

@@ -54,6 +54,23 @@ func (MySQL) JSONExtract(column string, path []string) (string, error) {
 	return fmt.Sprintf(`%s->>'$.%s'`, column, strings.Join(quoted, ".")), nil
 }
 
+// JSONComparableBool quotes the boolean as text: MySQL's ->> always returns
+// text, and while MySQL coerces a numeric-looking string to a number for
+// comparison, both "true" and "false" coerce to 0, silently equating them.
+func (MySQL) JSONComparableBool(v bool) string {
+	if v {
+		return "'true'"
+	}
+	return "'false'"
+}
+
+// JSONComparableNumber renders n unchanged: MySQL coerces the text ->>
+// returns back to a number for comparison against a numeric literal, so no
+// special handling is needed here (unlike JSONComparableBool).
+func (MySQL) JSONComparableNumber(n string) string {
+	return n
+}
+
 func (MySQL) DateAdd(expr, n, unit string) (string, error) {
 	if !ValidDateUnits[strings.ToLower(unit)] {
 		return "", ErrInvalidDateUnit("DATE_ADD", unit)

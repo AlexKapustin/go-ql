@@ -60,7 +60,7 @@ func TestMySQLIntegration(t *testing.T) {
 	var rows []row
 
 	err = db.Table("products").Scopes(Where(
-		`product.brand = :brand and product.price < 100 and product_custom.hfss is not null`,
+		`product.brand = :brand and product.price < 100 and product_custom.hfss = true`,
 		components,
 		WithParams(map[string]any{"brand": "Samsung"}),
 		WithDialect(dialect.NewMySQL()),
